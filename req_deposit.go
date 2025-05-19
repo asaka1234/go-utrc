@@ -1,72 +1,58 @@
 package go_utrc
 
 import (
-	"crypto/tls"
-	"github.com/asaka1234/go-utrc/utils"
-	"time"
+	"encoding/json"
+	"fmt"
+	"io/ioutil"
+	"net/http"
+	"net/url"
 )
 
-// 下单(充值/提现是同一个接口)
-func (cli *Client) Deposit(req PraxisDepositReq) (*PraxisDepositRsp, error) {
+// 下单
+func (cli *Client) Deposit(req UTRCDepositReq) (*UTRCDepositRsp, error) {
 
-	rawURL := cli.BaseURL
+	//TODO 貌似没有任何鉴权
+	
+	rawURL := cli.DepositURL
 
-	//拿到签名的参数
-	requestParams := cli.createRequestParams(req)
-	requestSignatureList := cli.getRequestSignatureList()
-	gtAuthenticationHeader := utils.GetGtAuthenticationHeader(requestParams, requestSignatureList, cli.MerchantKey)
-
-	//返回值会放到这里
-	var result PraxisDepositRsp
-
-	_, err := cli.ryClient.SetTLSClientConfig(&tls.Config{InsecureSkipVerify: true}).
-		SetCloseConnection(true).
-		R().
-		SetBody(requestParams).
-		SetHeaders(getAuthHeaders(gtAuthenticationHeader)).
-		SetResult(&result).
-		Post(rawURL)
-
-	//fmt.Printf("accessToken: %+v\n", resp)
-
+	// Build URL with query parameters
+	u, err := url.Parse(rawURL)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("invalid URL: %v", err)
 	}
 
-	return &result, err
-}
+	q := u.Query()
+	q.Add("code", req.Code)
+	q.Add("uid", req.UID)
+	q.Add("currency_type", req.CurrencyType)
+	q.Add("order_amount", req.OrderAmount)
+	q.Add("order_id", req.OrderID)
+	u.RawQuery = q.Encode()
 
-func (cli *Client) createRequestParams(req PraxisDepositReq) map[string]interface{} {
-	params := make(map[string]interface{})
+	fullURL := u.String()
 
-	params["merchant_id"] = cli.MerchantID // Assuming these are package-level variables
-	params["application_key"] = cli.ApplicationKey
-	params["intent"] = req.Intent
-	params["currency"] = req.Currency
-	params["amount"] = req.Amount
-	params["cid"] = req.Cid
-	params["locale"] = cli.ApiLocale
-	params["customer_token"] = req.CustomerToken
-	params["customer_data"] = req.CustomerData
-	params["payment_method"] = req.PaymentMethod
-	params["gateway"] = req.Gateway
-	params["validation_url"] = req.ValidationURL
-	params["notification_url"] = req.NotificationURL
-	params["return_url"] = req.ReturnURL
-	params["order_id"] = req.OrderID
-	params["version"] = cli.ApiVersion
-	params["timestamp"] = time.Now().Unix() // Unix timestamp in seconds
-
-	return params
-}
-
-func (cli *Client) getRequestSignatureList() []string {
-	return []string{
-		"merchant_id",
-		"application_key",
-		"timestamp",
-		"intent",
-		"cid",
-		"order_id",
+	// Make GET request
+	resp, err := http.Get(fullURL)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP request failed: %v", err)
 	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	// Read response body
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %v", err)
+	}
+
+	// Parse JSON response
+	var depositRsp UTRCDepositRsp
+	if err := json.Unmarshal(body, &depositRsp); err != nil {
+		return nil, fmt.Errorf("failed to parse response JSON: %v", err)
+	}
+
+	return &depositRsp, nil
 }
